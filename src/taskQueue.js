@@ -2,8 +2,6 @@
  * Async Task Queue
  * 
  * 工作件代码 - 故意保留改进空间：
- * - 无优先级
- * - 无任务取消
  * - 无错误重试
  * - 无并发控制（processOne 串行执行）
  */
@@ -18,6 +16,20 @@ export class TaskQueue {
     if (typeof task !== 'function') throw new Error('task must be a function');
     this.queue.push(task);
     return this.queue.length;
+  }
+
+  enqueuePriority(task) {
+    if (typeof task !== 'function') throw new Error('task must be a function');
+    this.queue.unshift(task);
+    return this.queue.length;
+  }
+
+  cancel(index) {
+    if (!Number.isInteger(index) || index < 0 || index >= this.queue.length) {
+      throw new Error('invalid task index');
+    }
+    const [removed] = this.queue.splice(index, 1);
+    return removed;
   }
 
   size() {
@@ -54,7 +66,5 @@ export class TaskQueue {
     };
   }
 
-  // TODO: enqueuePriority(task) - 高优先级插队
-  // TODO: cancel(index) - 取消队列中的任务
   // TODO: retry failed - 重试失败任务
 }
