@@ -1,8 +1,8 @@
-import { RateLimiter } from './rateLimiter.js';
+import { RateLimiter, TimeoutError } from './rateLimiter.js';
 import { TaskQueue } from './taskQueue.js';
 import { Scheduler } from './scheduler.js';
 
-export { RateLimiter, TaskQueue, Scheduler };
+export { RateLimiter, TimeoutError, TaskQueue, Scheduler };
 
 // Demo - 快速验证基本功能
 const scheduler = new Scheduler({ capacity: 3, refillRate: 1 });

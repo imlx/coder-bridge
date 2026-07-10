@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { RateLimiter } from '../src/rateLimiter.js';
+import { RateLimiter, TimeoutError } from '../src/rateLimiter.js';
 import { TaskQueue } from '../src/taskQueue.js';
 import { Scheduler } from '../src/scheduler.js';
 
@@ -65,4 +65,49 @@ test('RateLimiter - 并发安全', async () => {
   const consumed = results.filter(Boolean).length;
   // 当前实现不是并发安全的，这里会失败
   assert.strictEqual(consumed, 100);
+});
+
+test('RateLimiter - waitForTokens 快速路径', async () => {
+  const rl = new RateLimiter({ capacity: 10, refillRate: 1 });
+  const start = Date.now();
+  await rl.waitForTokens(5);
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 10, 'should resolve immediately');
+  assert.strictEqual(rl.getAvailable(), 5);
+});
+
+test('RateLimiter - waitForTokens 等待恢复', async () => {
+  const rl = new RateLimiter({ capacity: 5, refillRate: 100 });
+  rl.tryConsume(5); // 耗尽
+  const start = Date.now();
+  await rl.waitForTokens(3);
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed >= 20, 'should wait for refill');
+  assert.ok(elapsed < 100, 'should not wait too long');
+});
+
+test('RateLimiter - waitForTokens 超时', async () => {
+  const rl = new RateLimiter({ capacity: 5, refillRate: 1 });
+  rl.tryConsume(5); // 耗尽
+  const start = Date.now();
+  await assert.rejects(
+    rl.waitForTokens(3, 50),
+    (err) => err.name === 'TimeoutError'
+  );
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed >= 40, 'should wait until timeout');
+});
+
+test('RateLimiter - waitForTokens count 超过 capacity 抛错', async () => {
+  const rl = new RateLimiter({ capacity: 5, refillRate: 1 });
+  await assert.rejects(
+    rl.waitForTokens(10),
+    /exceeds capacity/
+  );
+});
+
+test('RateLimiter - TimeoutError 可识别', () => {
+  const err = new TimeoutError('test');
+  assert.strictEqual(err.name, 'TimeoutError');
+  assert.ok(err instanceof Error);
 });
