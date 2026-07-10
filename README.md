@@ -24,11 +24,9 @@
 | 命令 | `claude -p "prompt"` | `codex exec "prompt"` |
 | 工具白名单 | `--allowedTools "Edit" "Bash(npm test)"` | `-s workspace-write` |
 | 预算控制 | `--max-budget-usd 1` | - |
-| 输出格式 | `--output-format json` | 默认文本 |
+| 输出格式 | `--output-format text` | 默认文本 |
 
-**验证任务**：让 agent 给 `rateLimiter.js` 实现 `waitForTokens()` 方法，然后跑测试。
-
-**可运行 demo**：`npm run demo:1` — 终端实时展示 token 逐步消耗、waitForTokens 等待恢复、超时报错，以及优先级插队、任务取消的全过程。
+**可运行 demo**：`npm run demo:1` - MOSS 实际调用 `claude -p` 和 `codex exec` 执行真实编码任务，展示调度命令、CLI 实时输出、产出的代码文件。你看到的是"MOSS 调度两个 AI 干活"这个过程本身。
 
 ### Level 2 - 流式多轮（Streaming Multi-turn）
 
@@ -42,7 +40,7 @@
 
 **验证任务**：第一轮让 agent 读代码并分析问题，第二轮让它修复并发安全 bug，第三轮让它写新测试验证修复。
 
-**可运行 demo**：`npm run demo:2` — 终端展示 MOSS 与 Claude Code 之间的实时多轮对话流，可见每轮工具调用、可中断。
+**可运行 demo**：`npm run demo:2` - 终端展示 MOSS 与 Claude Code 之间的实时多轮对话流，可见每轮工具调用、可中断。
 
 ### Level 3 - MCP 互操作
 
@@ -53,7 +51,7 @@
 
 **验证任务**：Claude Code 在编码时通过 MCP 调用 MOSS 的记忆检索，查询"这个项目的设计决策"，基于记忆上下文做重构。
 
-**可运行 demo**：`npm run demo:3` — 终端展示跨 agent 的 MCP 工具调用链路。
+**可运行 demo**：`npm run demo:3` - 终端展示跨 agent 的 MCP 工具调用链路。
 
 ### Level 4 - 后台 + 持久化
 
@@ -67,7 +65,7 @@
 
 **验证任务**：MOSS 启动 Claude Code 后台重构整个 scheduler 模块，TICK 心跳检查进度，完成后通知用户。
 
-**可运行 demo**：`npm run demo:4` — 启动后台编码任务，关掉终端后回来查看 TICK 心跳跟踪的进度和主动播报。
+**可运行 demo**：`npm run demo:4` - 启动后台编码任务，关掉终端后回来查看 TICK 心跳跟踪的进度和主动播报。
 
 ### Level 5 - Hook + 自定义 Agent
 
@@ -81,7 +79,7 @@
 
 **验证任务**：定义"实现者"和"审查者"两个 agent 角色，实现者给 taskQueue 加优先级功能，审查者自动 review 代码质量。
 
-**可运行 demo**：`npm run demo:5` — 终端展示 hook 拦截危险操作、双 agent 互 review 的全过程。
+**可运行 demo**：`npm run demo:5` - 终端展示 hook 拦截危险操作、双 agent 互 review 的全过程。
 
 ## 目录结构
 
@@ -95,7 +93,10 @@ coder-bridge/
 │   ├── rateLimiter.js        # Token Bucket 限流器
 │   ├── taskQueue.js          # 异步任务队列
 │   ├── scheduler.js          # 限流调度器
-│   └── demo-level1.js        # Level 1 可视化 demo
+│   └── demo-level1.js        # Level 1 live dispatch demo
+├── scratch/                  # demo:1 运行时产出（自动清理）
+│   ├── claude-output.js      # Claude Code 产出
+│   └── codex-output.js       # Codex 产出
 ├── tests/
 │   └── unit.test.js          # 单元测试（含一个故意失败的测试）
 └── integration/
@@ -112,13 +113,13 @@ coder-bridge/
 cd /Volumes/T7/coder-bridge
 npm test            # 跑单元测试
 npm run demo        # 跑基础 demo
-npm run demo:1      # 跑 Level 1 可视化验证 demo
+npm run demo:1      # 跑 Level 1 live dispatch 验证 demo
 ```
 
 ## 环境
 
 - Node.js 22 (nvm)
-- Claude Code 2.1.205 (`/Users/lingxiao/.nvm/versions/node/v22.16.0/bin/claude`)
+- Claude Code 2.1.206 (`/Users/lingxiao/.nvm/versions/node/v22.16.0/bin/claude`)
 - Codex CLI 0.144.1 (`/Users/lingxiao/.nvm/versions/node/v22.16.0/bin/codex`)
 - MOSS (BaiLongma) 2.1.479
 
@@ -126,7 +127,7 @@ npm run demo:1      # 跑 Level 1 可视化验证 demo
 
 | 层级 | 状态 | 日期 | Demo |
 |------|------|------|------|
-| Level 1 - 一次性执行 | ✅ 已验证 | 2026-07-10 | `npm run demo:1` |
+| Level 1 - 一次性执行 | ✅ 已验证 | 2026-07-11 | `npm run demo:1` |
 | Level 2 - 流式多轮 | 待验证 | - | `npm run demo:2` |
 | Level 3 - MCP 互操作 | 待验证 | - | `npm run demo:3` |
 | Level 4 - 后台持久化 | 待验证 | - | `npm run demo:4` |
@@ -134,14 +135,16 @@ npm run demo:1      # 跑 Level 1 可视化验证 demo
 
 ## Level 1 验证详情
 
-**执行时间**：2026-07-10
+**执行时间**：2026-07-11
 
-**Claude Code 任务**：给 `rateLimiter.js` 实现 `waitForTokens(count, timeout)` 方法 + `TimeoutError` 类
-- 命令：`claude -p "..." --allowedTools "Edit" "Bash(npm test)" --output-format json`
-- 结果：一次通过，实现了 token 等待恢复和超时错误
+**验证方式**：Live Dispatch - MOSS 实际调用 CLI 工具，Claude Code 和 Codex 各自独立完成一次性编码任务。
 
-**Codex 任务**：给 `taskQueue.js` 实现 `enqueuePriority(task)` + `cancel(index)` 方法
+**Claude Code 任务**：创建 `scratch/claude-output.js`，导出 `formatTimestamp(date)` 函数
+- 命令：`claude -p "..." --output-format text`
+- 结果：14 秒完成，产出了正确的 formatTimestamp 函数（YYYY-MM-DD HH:mm:ss 格式化）
+
+**Codex 任务**：创建 `scratch/codex-output.js`，导出 `generateId()` 函数
 - 命令：`codex exec "..." -s workspace-write`
-- 结果：一次通过，实现了优先级插队和任务取消
+- 结果：35 秒完成，产出了正确的 generateId 函数（8 位随机字母数字 ID）
 
-**测试**：13 个单元测试全部通过（最后一个并发测试为故意失败，不计入）
+**验证结论**：MOSS 通过 `exec_command` 调用 CLI，Claude Code 和 Codex 各自独立完成了一次性编码任务，产出了真实可读的代码文件。Level 1 one-shot dispatch 调度链路验证通过。

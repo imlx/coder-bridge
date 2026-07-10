@@ -1,206 +1,284 @@
 /**
- * Level 1 Demo - 一次性执行验证的可视化展示
+ * Level 1 Demo - Live Dispatch 验证
  *
  * 运行：npm run demo:1
  *
- * 这个 demo 让你直观看到 Level 1 验证中两个 AI 各自实现了什么：
- * - Claude Code 实现了 RateLimiter.waitForTokens() + TimeoutError
- * - Codex 实现了 TaskQueue.enqueuePriority() + cancel()
+ * 这个 demo 展示 MOSS 一次性调度 Claude Code 和 Codex 执行真实编码任务：
+ * - 接收编码任务
+ * - 分派给 Claude Code (claude -p "...") 创建真实文件
+ * - 分派给 Codex (codex exec "...") 创建真实文件
+ * - 展示两者的实时 CLI 输出和产出的代码
+ * - 验证 one-shot dispatch 链路
+ *
+ * 这是 Level 1 的正确验证方式：你看的是"MOSS 调度两个 AI 干活"这个过程本身，
+ * 不是"两个 AI 写的代码能不能跑"。
  */
 
-import { RateLimiter, TimeoutError } from './rateLimiter.js';
-import { TaskQueue } from './taskQueue.js';
+import { spawn } from 'child_process';
+import { readFileSync, existsSync, mkdirSync, rmSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
-const CYAN = '\x1b[36m';
-const GREEN = '\x1b[32m';
-const YELLOW = '\x1b[33m';
-const RED = '\x1b[31m';
-const MAGENTA = '\x1b[35m';
-const DIM = '\x1b[2m';
-const BOLD = '\x1b[1m';
-const RESET = '\x1b[0m';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const projectRoot = join(__dirname, '..');
+const scratchDir = join(projectRoot, 'scratch');
+const NVM_INIT = 'source ~/.nvm/nvm.sh && nvm use 22 >/dev/null 2>&1';
+const DISPATCH_TIMEOUT = 90000; // 90s per dispatch
+
+// ── ANSI 颜色 ──────────────────────────────────────────────
+const C = {
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  bold: '\x1b[1m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+  gray: '\x1b[90m',
+};
+
+// ── 工具函数 ───────────────────────────────────────────────
+function ts() {
+  return new Date().toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function banner(text) {
+  const line = '═'.repeat(60);
+  console.log(`\n${C.cyan}╔${line}╗${C.reset}`);
+  const pad = Math.max(0, 58 - [...text].length);
+  console.log(`${C.cyan}║  ${C.bold}${text}${C.reset}${C.cyan}${' '.repeat(pad)}  ║${C.reset}`);
+  console.log(`${C.cyan}╚${line}╝${C.reset}`);
+}
+
+function log(icon, msg) {
+  console.log(`  ${C.gray}[${ts()}]${C.reset} ${icon} ${msg}`);
+}
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-function timestamp() {
-  return new Date().toISOString().split('T')[1].replace('Z', '');
+/**
+ * 实时执行命令，流式输出 stdout/stderr
+ * stdin 设为 ignore 避免 codex exec 卡在等待输入
+ * @param {string} command - 要执行的完整命令
+ * @param {string} color - ANSI 颜色码，用于输出前缀
+ * @returns {Promise<{ok: boolean, stdout: string, exitCode: number}>}
+ */
+function dispatchLive(command, color) {
+  return new Promise((resolve) => {
+    const fullCmd = `${NVM_INIT} && cd ${projectRoot} && ${command}`;
+    const child = spawn('bash', ['-c', fullCmd], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let resolved = false;
+
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        child.kill('SIGTERM');
+        resolve({ ok: false, stdout, stderr: 'timeout', exitCode: -1 });
+      }
+    }, DISPATCH_TIMEOUT);
+
+    child.stdout.on('data', (data) => {
+      const text = data.toString();
+      stdout += text;
+      text.split('\n').forEach((line) => {
+        if (line.trim()) {
+          console.log(`  ${color}│${C.reset} ${C.dim}${line}${C.reset}`);
+        }
+      });
+    });
+
+    child.stderr.on('data', (data) => {
+      const text = data.toString();
+      stderr += text;
+      text.split('\n').forEach((line) => {
+        if (line.trim()) {
+          console.log(`  ${C.gray}│ ${line}${C.reset}`);
+        }
+      });
+    });
+
+    child.on('close', (code) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        resolve({ ok: code === 0, stdout, stderr, exitCode: code });
+      }
+    });
+
+    child.on('error', (err) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        resolve({ ok: false, stdout, stderr: err.message, exitCode: -1 });
+      }
+    });
+  });
 }
 
-function banner(text) {
-  const line = '═'.repeat(Math.max(text.length + 4, 60));
-  console.log(`${CYAN}╔${line}╗${RESET}`);
-  console.log(`${CYAN}║  ${BOLD}${text}${RESET}${CYAN}${' '.repeat(Math.max(text.length + 2, 58) - text.length)}║${RESET}`);
-  console.log(`${CYAN}╚${line}╝${RESET}`);
-}
-
-function section(text) {
-  console.log(`\n${MAGENTA}─── ${text} ${'─'.repeat(Math.max(0, 54 - text.length))}${RESET}\n`);
-}
-
-function log(icon, msg) {
-  console.log(`  ${DIM}[${timestamp()}]${RESET} ${icon} ${msg}`);
-}
-
-async function demoRateLimiter() {
-  banner('Level 1 Demo · Part 1: RateLimiter');
-  console.log(`  ${DIM}实现者：Claude Code (claude -p one-shot)${RESET}`);
-  console.log(`  ${DIM}实现内容：waitForTokens(count, timeout) + TimeoutError${RESET}`);
-  console.log(`  ${DIM}文件：src/rateLimiter.js${RESET}\n`);
-
-  // --- 场景 1：逐步消耗 token ---
-  section('场景 1 · Token 逐步消耗');
-  const rl = new RateLimiter({ capacity: 5, refillRate: 2 });
-
-  log('📊', `初始状态：capacity=5, refillRate=2 tokens/s, 可用=${GREEN}${rl.getAvailable()}${RESET}`);
-
-  for (let i = 1; i <= 5; i++) {
-    const ok = rl.tryConsume(1);
-    if (ok) {
-      log('✅', `消耗 1 token → 剩余 ${GREEN}${rl.getAvailable()}${RESET}`);
-    } else {
-      log('❌', `消耗失败 → token 不足，剩余 ${RED}${rl.getAvailable()}${RESET}`);
-    }
-    await sleep(200);
+/**
+ * 读取并展示文件内容
+ */
+function showFile(filePath, label, color) {
+  if (!existsSync(filePath)) {
+    log('❌', `${C.red}文件未创建：${filePath}${C.reset}`);
+    return null;
   }
 
-  // --- 场景 2：token 耗尽后等待恢复 ---
-  section('场景 2 · waitForTokens 等待恢复');
-  log('⚡', `token 已耗尽，调用 waitForTokens(1, timeout=5000)`);
-  log('⏳', `等待 refill... 每秒恢复 2 个 token`);
+  const content = readFileSync(filePath, 'utf-8');
+  console.log(`\n  ${color}${C.bold}📄 ${label} 产出文件：${C.reset}`);
+  console.log(`  ${C.gray}${'─'.repeat(56)}${C.reset}`);
 
-  const start = Date.now();
-  await rl.waitForTokens(1, 5000);
-  const elapsed = Date.now() - start;
+  content.split('\n').forEach((line, i) => {
+    const lineNum = String(i + 1).padStart(3, ' ');
+    console.log(`  ${C.gray}${lineNum} │${C.reset} ${line}`);
+  });
 
-  log('✅', `waitForTokens 返回！耗时 ${YELLOW}${elapsed}ms${RESET}，当前可用=${GREEN}${rl.getAvailable()}${RESET}`);
-
-  // --- 场景 3：超时 ---
-  section('场景 3 · waitForTokens 超时');
-  const rl2 = new RateLimiter({ capacity: 3, refillRate: 1 });
-  rl2.tryConsume(3);
-  log('🔋', `新限流器：capacity=3, refillRate=1/s，已全部消耗`);
-
-  log('⏳', `调用 waitForTokens(5, timeout=300) — 需要 5 个但 capacity 只有 3`);
-  const start2 = Date.now();
-  try {
-    await rl2.waitForTokens(5, 300);
-  } catch (err) {
-    const elapsed2 = Date.now() - start2;
-    if (err instanceof TimeoutError) {
-      log('💥', `${RED}TimeoutError${RESET} 触发！耗时 ${YELLOW}${elapsed2}ms${RESET}`);
-      log('📝', `错误信息：${DIM}${err.message}${RESET}`);
-    } else {
-      log('💥', `其他错误：${err.message}`);
-    }
-  }
-
-  // --- 场景 4：批量消耗 + 等待 ---
-  section('场景 4 · 批量 token 消耗');
-  const rl3 = new RateLimiter({ capacity: 10, refillRate: 5 });
-  log('📊', `新限流器：capacity=10, refillRate=5 tokens/s`);
-
-  log('⬇️', `一次性消耗 8 个 token`);
-  rl3.tryConsume(8);
-  log('📊', `剩余 ${YELLOW}${rl3.getAvailable()}${RESET} 个 token`);
-
-  log('⏳', `调用 waitForTokens(5) — 需要 5 个，只剩 2 个，等待恢复...`);
-  const start3 = Date.now();
-  await rl3.waitForTokens(5);
-  const elapsed3 = Date.now() - start3;
-  log('✅', `获取成功！耗时 ${YELLOW}${elapsed3}ms${RESET}，消耗 5 个，剩余 ${GREEN}${rl3.getAvailable()}${RESET}`);
-
-  console.log(`\n  ${GREEN}✓ RateLimiter 验证完成${RESET}`);
+  console.log(`  ${C.gray}${'─'.repeat(56)}${C.reset}`);
+  return content;
 }
 
-async function demoTaskQueue() {
-  banner('Level 1 Demo · Part 2: TaskQueue');
-  console.log(`  ${DIM}实现者：Codex (codex exec one-shot)${RESET}`);
-  console.log(`  ${DIM}实现内容：enqueuePriority(task) + cancel(index)${RESET}`);
-  console.log(`  ${DIM}文件：src/taskQueue.js${RESET}\n`);
+// ── 编码任务定义 ───────────────────────────────────────────
+const CLAUDE_TASK = {
+  agent: 'Claude Code',
+  version: '2.1.206',
+  color: C.blue,
+  command: `claude -p "在 scratch/ 目录下创建文件 claude-output.js，导出一个 formatTimestamp(date) 函数。接收一个 Date 对象，返回 'YYYY-MM-DD HH:mm:ss' 格式的字符串。只创建这一个文件，不要修改其他文件。" --output-format text`,
+  outputFile: join(scratchDir, 'claude-output.js'),
+  taskDesc: '创建 formatTimestamp(date) 工具函数',
+};
 
-  // --- 场景 1：普通入队 ---
-  section('场景 1 · 普通任务入队');
-  const q = new TaskQueue();
+const CODEX_TASK = {
+  agent: 'Codex CLI',
+  version: '0.144.1',
+  color: C.green,
+  command: `codex exec "在 scratch/ 目录下创建文件 codex-output.js，导出一个 generateId() 函数。返回 8 位随机小写字母数字 ID 字符串。只创建这一个文件，不要修改其他文件。" -s workspace-write`,
+  outputFile: join(scratchDir, 'codex-output.js'),
+  taskDesc: '创建 generateId() 工具函数',
+};
 
-  const tasks = [
-    { name: '发送邮件', fn: async () => 'email sent' },
-    { name: '生成报表', fn: async () => 'report generated' },
-    { name: '清理缓存', fn: async () => 'cache cleared' },
-  ];
-
-  for (const t of tasks) {
-    const len = q.enqueue(t.fn);
-    log('📥', `普通入队：「${t.name}」→ 队列位置 ${len}，当前队列长度=${YELLOW}${q.size()}${RESET}`);
-    await sleep(150);
-  }
-
-  // --- 场景 2：优先级入队 ---
-  section('场景 2 · 优先级任务插队');
-  log('🚀', `紧急任务来了！调用 enqueuePriority() 插入队列头部`);
-
-  const urgentTask = { name: '⚠️ 紧急修复', fn: async () => 'urgent fix applied' };
-  const len = q.enqueuePriority(urgentTask.fn);
-  log('⚡', `优先入队：「${urgentTask.name}」→ 队列位置 ${GREEN}1${RESET}（头部），当前队列长度=${YELLOW}${q.size()}${RESET}`);
-
-  const anotherUrgent = { name: '⚠️ 紧急回滚', fn: async () => 'rollback done' };
-  const len2 = q.enqueuePriority(anotherUrgent.fn);
-  log('⚡', `优先入队：「${anotherUrgent.name}」→ 队列位置 ${GREEN}1${RESET}（头部），当前队列长度=${YELLOW}${q.size()}${RESET}`);
-
-  // --- 场景 3：取消任务 ---
-  section('场景 3 · 取消队列中的任务');
-  log('🔍', `当前队列长度=${YELLOW}${q.size()}${RESET}，取消索引 2 的任务（第三个）`);
-
-  const cancelled = q.cancel(2);
-  log('🗑️', `已取消队列索引 2 的任务，当前队列长度=${YELLOW}${q.size()}${RESET}`);
-
-  // --- 场景 4：按优先级顺序处理 ---
-  section('场景 4 · 按优先级顺序处理');
-  log('▶️', `开始处理队列，预期顺序：紧急回滚 → 紧急修复 → 发送邮件 → 生成报表`);
-
-  const order = ['⚠️ 紧急回滚', '⚠️ 紧急修复', '发送邮件', '生成报表'];
-  let idx = 0;
-  while (q.size() > 0) {
-    const result = await q.processOne();
-    const expected = order[idx];
-    const icon = result.status === 'ok' ? '✅' : '❌';
-    log(icon, `处理 #${idx + 1}：${GREEN}${expected}${RESET} → ${result.status}`);
-    idx++;
-    await sleep(200);
-  }
-
-  // --- 场景 5：统计 ---
-  section('场景 5 · 队列统计');
-  const stats = q.getStats();
-  log('📊', `完成=${GREEN}${stats.completed}${RESET}  失败=${RED}${stats.failed}${RESET}  待处理=${YELLOW}${stats.pending}${RESET}`);
-
-  console.log(`\n  ${GREEN}✓ TaskQueue 验证完成${RESET}`);
-}
-
+// ── 主流程 ─────────────────────────────────────────────────
 async function main() {
+  // 1. 初始化
   console.log('\n');
-  banner('coder-bridge · Level 1 可视化验证');
-  console.log(`  ${DIM}验证模式：一次性执行（One-shot）${RESET}`);
-  console.log(`  ${DIM}调度方：MOSS (BaiLongma 2.1.479)${RESET}`);
-  console.log(`  ${DIM}执行方：Claude Code 2.1.205 + Codex CLI 0.144.1${RESET}`);
-  console.log(`  ${DIM}时间：${new Date().toISOString()}${RESET}`);
+  banner('coder-bridge · Level 1 Live Dispatch 验证');
+  console.log(`  ${C.gray}验证目标：MOSS 一次性调度 Claude Code 和 Codex 执行真实编码任务${C.reset}`);
+  console.log(`  ${C.gray}调度方：MOSS (BaiLongma 2.1.479)${C.reset}`);
+  console.log(`  ${C.gray}时间：${new Date().toISOString()}${C.reset}`);
+  console.log(`  ${C.gray}项目：${projectRoot}${C.reset}`);
 
-  await demoRateLimiter();
-  await sleep(500);
-  await demoTaskQueue();
+  // 2. 准备 scratch 目录
+  console.log(`\n  ${C.gray}── 准备工作 ──${C.reset}`);
+  if (existsSync(scratchDir)) {
+    rmSync(scratchDir, { recursive: true, force: true });
+    log('🧹', '清理旧的 scratch/ 目录');
+  }
+  mkdirSync(scratchDir, { recursive: true });
+  log('📂', `创建 scratch/ 目录：${scratchDir}`);
 
+  // 验证 claude 和 codex 可用
+  const checkCmd = `${NVM_INIT} && which claude && claude --version && which codex && codex --version`;
+  const check = await dispatchLive(checkCmd, C.gray);
+  if (!check.ok) {
+    log('❌', `${C.red}环境检查失败，claude 或 codex 不可用${C.reset}`);
+    log('💡', `${C.dim}请确认 nvm node 22 已安装 claude 和 codex${C.reset}`);
+    process.exit(1);
+  }
+
+  // 3. 分派给 Claude Code
+  console.log(`\n  ${C.gray}── Dispatch 1/2 ──${C.reset}\n`);
+  log('🎯', `${C.blue}${C.bold}MOSS -> Claude Code${C.reset} ${C.gray}(${CLAUDE_TASK.version})${C.reset}`);
+  log('📋', `任务：${CLAUDE_TASK.taskDesc}`);
+  console.log(`  ${C.gray}$ ${CLAUDE_TASK.command}${C.reset}\n`);
+
+  const claudeResult = await dispatchLive(CLAUDE_TASK.command, C.blue);
+
+  if (claudeResult.ok) {
+    log('✅', `${C.green}Claude Code 执行完成${C.reset} ${C.gray}(exit ${claudeResult.exitCode})${C.reset}`);
+  } else {
+    log('❌', `${C.red}Claude Code 执行失败${C.reset} ${C.gray}(exit ${claudeResult.exitCode})${C.reset}`);
+  }
+
+  await sleep(300);
+  showFile(CLAUDE_TASK.outputFile, 'Claude Code', C.blue);
+
+  // 4. 分派给 Codex
+  console.log(`\n  ${C.gray}── Dispatch 2/2 ──${C.reset}\n`);
+  log('🎯', `${C.green}${C.bold}MOSS -> Codex CLI${C.reset} ${C.gray}(${CODEX_TASK.version})${C.reset}`);
+  log('📋', `任务：${CODEX_TASK.taskDesc}`);
+  console.log(`  ${C.gray}$ ${CODEX_TASK.command}${C.reset}\n`);
+
+  const codexResult = await dispatchLive(CODEX_TASK.command, C.green);
+
+  if (codexResult.ok) {
+    log('✅', `${C.green}Codex 执行完成${C.reset} ${C.gray}(exit ${codexResult.exitCode})${C.reset}`);
+  } else {
+    log('❌', `${C.red}Codex 执行失败${C.reset} ${C.gray}(exit ${codexResult.exitCode})${C.reset}`);
+  }
+
+  await sleep(300);
+  showFile(CODEX_TASK.outputFile, 'Codex CLI', C.green);
+
+  // 5. 验证产出
+  console.log(`\n  ${C.gray}── 产出验证 ──${C.reset}\n`);
+
+  let claudeOk = false;
+  let codexOk = false;
+
+  if (existsSync(CLAUDE_TASK.outputFile)) {
+    const content = readFileSync(CLAUDE_TASK.outputFile, 'utf-8');
+    claudeOk = content.includes('formatTimestamp') && content.includes('export');
+    log(claudeOk ? '✅' : '⚠️', `Claude Code 产出${claudeOk ? `${C.green}验证通过${C.reset}` : `${C.yellow}格式异常${C.reset}`}：${C.gray}包含 formatTimestamp 导出${C.reset}`);
+  } else {
+    log('❌', `${C.red}Claude Code 未产出文件${C.reset}`);
+  }
+
+  if (existsSync(CODEX_TASK.outputFile)) {
+    const content = readFileSync(CODEX_TASK.outputFile, 'utf-8');
+    codexOk = content.includes('generateId') && content.includes('export');
+    log(codexOk ? '✅' : '⚠️', `Codex 产出${codexOk ? `${C.green}验证通过${C.reset}` : `${C.yellow}格式异常${C.reset}`}：${C.gray}包含 generateId 导出${C.reset}`);
+  } else {
+    log('❌', `${C.red}Codex 未产出文件${C.reset}`);
+  }
+
+  // 6. 总结
   console.log('\n');
-  banner('Level 1 验证总结');
-  console.log(`  ${GREEN}✓ Claude Code${RESET} 实现了 RateLimiter.waitForTokens() + TimeoutError`);
-  console.log(`    ${DIM}→ 限流器能在 token 不足时自动等待恢复，超时时抛出可识别错误${RESET}`);
-  console.log(`  ${GREEN}✓ Codex${RESET} 实现了 TaskQueue.enqueuePriority() + cancel()`);
-  console.log(`    ${DIM}→ 任务队列支持优先级插队和任意位置取消${RESET}`);
-  console.log(`\n  ${BOLD}两个 AI 各自独立 one-shot 完成，无需人工干预。${RESET}`);
-  console.log(`  ${DIM}运行 npm test 可查看 13 个单元测试的详细结果。${RESET}\n`);
+  banner('Level 1 Live Dispatch 验证总结');
+
+  const bothOk = claudeOk && codexOk;
+  if (bothOk) {
+    console.log(`  ${C.green}${C.bold}✓ 调度链路验证通过${C.reset}\n`);
+  } else {
+    console.log(`  ${C.yellow}${C.bold}⚠ 部分验证通过${C.reset}\n`);
+  }
+
+  console.log(`  ${C.blue}Claude Code${C.reset} ${C.gray}${CLAUDE_TASK.version}${C.reset}`);
+  console.log(`    任务：${CLAUDE_TASK.taskDesc}`);
+  console.log(`    产出：${existsSync(CLAUDE_TASK.outputFile) ? `${C.green}scratch/claude-output.js${C.reset}` : `${C.red}无${C.reset}`}`);
+  console.log(`    状态：${claudeOk ? `${C.green}✓ 通过${C.reset}` : `${C.red}✗ 未通过${C.reset}`}`);
+
+  console.log(`\n  ${C.green}Codex CLI${C.reset} ${C.gray}${CODEX_TASK.version}${C.reset}`);
+  console.log(`    任务：${CODEX_TASK.taskDesc}`);
+  console.log(`    产出：${existsSync(CODEX_TASK.outputFile) ? `${C.green}scratch/codex-output.js${C.reset}` : `${C.red}无${C.reset}`}`);
+  console.log(`    状态：${codexOk ? `${C.green}✓ 通过${C.reset}` : `${C.red}✗ 未通过${C.reset}`}`);
+
+  console.log(`\n  ${C.bold}验证内容：${C.reset}${C.gray}MOSS 通过 exec_command 调用 CLI，Claude Code 和 Codex 各自${C.reset}`);
+  console.log(`  ${C.gray}独立完成了一次性编码任务，产出了真实可读的代码文件。${C.reset}`);
+  console.log(`  ${C.gray}这证明 Level 1 one-shot dispatch 调度链路是通的。${C.reset}`);
+  console.log(`\n  ${C.gray}scratch/ 目录下的文件保留供检查，下次运行会自动清理。${C.reset}\n`);
+
+  process.exit(bothOk ? 0 : 1);
 }
 
-main().catch(err => {
-  console.error(`${RED}Demo 运行出错：${err.message}${RESET}`);
+main().catch((err) => {
+  console.error(`\n  ${C.red}Demo 运行出错：${err.message}${C.reset}\n`);
   process.exit(1);
 });
