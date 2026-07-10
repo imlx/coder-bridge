@@ -1,0 +1,12 @@
+{
+  "name": "coder-bridge",
+  "version": "0.1.0",
+  "description": "MOSS x Claude Code x Codex - 五层调度验证测试床",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test tests/unit.test.js",
+    "demo": "node src/index.js"
+  },
+  "license": "MIT"
+}
