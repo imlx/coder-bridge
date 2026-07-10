@@ -6,7 +6,8 @@
   "main": "src/index.js",
   "scripts": {
     "test": "node --test tests/unit.test.js",
-    "demo": "node src/index.js"
+    "demo": "node src/index.js",
+    "demo:1": "node src/demo-level1.js"
   },
   "license": "MIT"
 }

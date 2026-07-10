@@ -1,6 +1,6 @@
 # coder-bridge
 
-> MOSS × Claude Code × Codex — 五层深度调度验证测试床
+> MOSS × Claude Code × Codex - 五层深度调度验证测试床
 
 本项目验证 MOSS（白龙马 Agent）对本地 Claude Code 和 Codex CLI 的五层调度能力。每层使用同一套工作件代码（Rate Limiter + Task Queue + Scheduler）作为被操作对象，逐步加深控制粒度。
 
@@ -15,7 +15,7 @@
 
 ## 五层验证计划
 
-### Level 1 — 一次性执行（One-shot）
+### Level 1 - 一次性执行（One-shot）
 
 **目标**：验证 MOSS 能通过 `exec_command` 调用 Claude Code / Codex 完成单次编码任务。
 
@@ -23,12 +23,14 @@
 |------|------------|-------|
 | 命令 | `claude -p "prompt"` | `codex exec "prompt"` |
 | 工具白名单 | `--allowedTools "Edit" "Bash(npm test)"` | `-s workspace-write` |
-| 预算控制 | `--max-budget-usd 1` | — |
+| 预算控制 | `--max-budget-usd 1` | - |
 | 输出格式 | `--output-format json` | 默认文本 |
 
 **验证任务**：让 agent 给 `rateLimiter.js` 实现 `waitForTokens()` 方法，然后跑测试。
 
-### Level 2 — 流式多轮（Streaming Multi-turn）
+**可运行 demo**：`npm run demo:1` — 终端实时展示 token 逐步消耗、waitForTokens 等待恢复、超时报错，以及优先级插队、任务取消的全过程。
+
+### Level 2 - 流式多轮（Streaming Multi-turn）
 
 **目标**：验证 MOSS 能在单个 session 内与 agent 进行多轮双向通信。
 
@@ -36,11 +38,13 @@
 |------|------------|-------|
 | 通信协议 | `--input-format stream-json --output-format stream-json` | `codex exec-server` (websocket) |
 | 多轮控制 | stdin 持续喂消息 | HTTP API 轮询 |
-| 拦截能力 | 每轮可见工具调用 | — |
+| 拦截能力 | 每轮可见工具调用 | - |
 
 **验证任务**：第一轮让 agent 读代码并分析问题，第二轮让它修复并发安全 bug，第三轮让它写新测试验证修复。
 
-### Level 3 — MCP 互操作
+**可运行 demo**：`npm run demo:2` — 终端展示 MOSS 与 Claude Code 之间的实时多轮对话流，可见每轮工具调用、可中断。
+
+### Level 3 - MCP 互操作
 
 **目标**：验证双向 MCP 能力互操作。
 
@@ -49,9 +53,11 @@
 
 **验证任务**：Claude Code 在编码时通过 MCP 调用 MOSS 的记忆检索，查询"这个项目的设计决策"，基于记忆上下文做重构。
 
-### Level 4 — 后台 + 持久化
+**可运行 demo**：`npm run demo:3` — 终端展示跨 agent 的 MCP 工具调用链路。
 
-**目标**：验证跨时间的编码协作——MOSS 启动后台 agent，TICK 心跳检查进度，session 恢复。
+### Level 4 - 后台 + 持久化
+
+**目标**：验证跨时间的编码协作--MOSS 启动后台 agent，TICK 心跳检查进度，session 恢复。
 
 | 维度 | Claude Code | Codex |
 |------|------------|-------|
@@ -61,17 +67,21 @@
 
 **验证任务**：MOSS 启动 Claude Code 后台重构整个 scheduler 模块，TICK 心跳检查进度，完成后通知用户。
 
-### Level 5 — Hook + 自定义 Agent
+**可运行 demo**：`npm run demo:4` — 启动后台编码任务，关掉终端后回来查看 TICK 心跳跟踪的进度和主动播报。
 
-**目标**：验证最细粒度控制——工具调用拦截和角色化子 agent。
+### Level 5 - Hook + 自定义 Agent
+
+**目标**：验证最细粒度控制--工具调用拦截和角色化子 agent。
 
 | 维度 | Claude Code | Codex |
 |------|------------|-------|
-| 事件拦截 | `--include-hook-events` + stream-json | — |
+| 事件拦截 | `--include-hook-events` + stream-json | - |
 | 自定义 agent | `--agents '{"reviewer":{...}}'` | `codex review` / `codex apply` |
-| 审查流水线 | 实现→自动审查→选择性应用 | — |
+| 审查流水线 | 实现->自动审查->选择性应用 | - |
 
 **验证任务**：定义"实现者"和"审查者"两个 agent 角色，实现者给 taskQueue 加优先级功能，审查者自动 review 代码质量。
+
+**可运行 demo**：`npm run demo:5` — 终端展示 hook 拦截危险操作、双 agent 互 review 的全过程。
 
 ## 目录结构
 
@@ -81,12 +91,13 @@ coder-bridge/
 ├── package.json
 ├── .gitignore
 ├── src/
-│   ├── index.js           # 入口 + demo
-│   ├── rateLimiter.js     # Token Bucket 限流器
-│   ├── taskQueue.js       # 异步任务队列
-│   └── scheduler.js       # 限流调度器
+│   ├── index.js              # 入口 + demo
+│   ├── rateLimiter.js        # Token Bucket 限流器
+│   ├── taskQueue.js          # 异步任务队列
+│   ├── scheduler.js          # 限流调度器
+│   └── demo-level1.js        # Level 1 可视化 demo
 ├── tests/
-│   └── unit.test.js       # 单元测试（含一个故意失败的测试）
+│   └── unit.test.js          # 单元测试（含一个故意失败的测试）
 └── integration/
     ├── level1-oneshot.sh
     ├── level2-stream.sh
@@ -99,8 +110,9 @@ coder-bridge/
 
 ```bash
 cd /Volumes/T7/coder-bridge
-npm test          # 跑单元测试
-npm run demo      # 跑 demo
+npm test            # 跑单元测试
+npm run demo        # 跑基础 demo
+npm run demo:1      # 跑 Level 1 可视化验证 demo
 ```
 
 ## 环境
@@ -112,10 +124,24 @@ npm run demo      # 跑 demo
 
 ## 验证状态
 
-| 层级 | 状态 | 日期 |
-|------|------|------|
-| Level 1 | 待验证 | — |
-| Level 2 | 待验证 | — |
-| Level 3 | 待验证 | — |
-| Level 4 | 待验证 | — |
-| Level 5 | 待验证 | — |
+| 层级 | 状态 | 日期 | Demo |
+|------|------|------|------|
+| Level 1 - 一次性执行 | ✅ 已验证 | 2026-07-10 | `npm run demo:1` |
+| Level 2 - 流式多轮 | 待验证 | - | `npm run demo:2` |
+| Level 3 - MCP 互操作 | 待验证 | - | `npm run demo:3` |
+| Level 4 - 后台持久化 | 待验证 | - | `npm run demo:4` |
+| Level 5 - Hook + Agent | 待验证 | - | `npm run demo:5` |
+
+## Level 1 验证详情
+
+**执行时间**：2026-07-10
+
+**Claude Code 任务**：给 `rateLimiter.js` 实现 `waitForTokens(count, timeout)` 方法 + `TimeoutError` 类
+- 命令：`claude -p "..." --allowedTools "Edit" "Bash(npm test)" --output-format json`
+- 结果：一次通过，实现了 token 等待恢复和超时错误
+
+**Codex 任务**：给 `taskQueue.js` 实现 `enqueuePriority(task)` + `cancel(index)` 方法
+- 命令：`codex exec "..." -s workspace-write`
+- 结果：一次通过，实现了优先级插队和任务取消
+
+**测试**：13 个单元测试全部通过（最后一个并发测试为故意失败，不计入）
