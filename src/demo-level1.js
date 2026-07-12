@@ -151,7 +151,7 @@ const CLAUDE_TASK = {
   agent: 'Claude Code',
   version: '2.1.206',
   color: C.blue,
-  command: `claude -p "在 scratch/ 目录下创建文件 claude-output.js，导出一个 formatTimestamp(date) 函数。接收一个 Date 对象，返回 'YYYY-MM-DD HH:mm:ss' 格式的字符串。只创建这一个文件，不要修改其他文件。" --output-format text`,
+  command: `claude -p "在 scratch/ 目录下创建文件 claude-output.js，导出一个 formatTimestamp(date) 函数。接收一个 Date 对象，返回 'YYYY-MM-DD HH:mm:ss' 格式的字符串。使用 ES Module 语法（export function，不要用 module.exports）。只创建这一个文件，不要修改其他文件。" --output-format text`,
   outputFile: join(scratchDir, 'claude-output.js'),
   taskDesc: '创建 formatTimestamp(date) 工具函数',
 };
@@ -160,7 +160,7 @@ const CODEX_TASK = {
   agent: 'Codex CLI',
   version: '0.144.1',
   color: C.green,
-  command: `codex exec "在 scratch/ 目录下创建文件 codex-output.js，导出一个 generateId() 函数。返回 8 位随机小写字母数字 ID 字符串。只创建这一个文件，不要修改其他文件。" -s workspace-write`,
+  command: `codex exec "在 scratch/ 目录下创建文件 codex-output.js，导出一个 generateId() 函数。返回 8 位随机小写字母数字 ID 字符串。使用 ES Module 语法（export function，不要用 module.exports）。只创建这一个文件，不要修改其他文件。" -s workspace-write`,
   outputFile: join(scratchDir, 'codex-output.js'),
   taskDesc: '创建 generateId() 工具函数',
 };
@@ -235,7 +235,7 @@ async function main() {
 
   if (existsSync(CLAUDE_TASK.outputFile)) {
     const content = readFileSync(CLAUDE_TASK.outputFile, 'utf-8');
-    claudeOk = content.includes('formatTimestamp') && content.includes('export');
+    claudeOk = content.includes('formatTimestamp') && /export\s+(function|const|default)/.test(content);
     log(claudeOk ? '✅' : '⚠️', `Claude Code 产出${claudeOk ? `${C.green}验证通过${C.reset}` : `${C.yellow}格式异常${C.reset}`}：${C.gray}包含 formatTimestamp 导出${C.reset}`);
   } else {
     log('❌', `${C.red}Claude Code 未产出文件${C.reset}`);
@@ -243,7 +243,7 @@ async function main() {
 
   if (existsSync(CODEX_TASK.outputFile)) {
     const content = readFileSync(CODEX_TASK.outputFile, 'utf-8');
-    codexOk = content.includes('generateId') && content.includes('export');
+    codexOk = content.includes('generateId') && /export\s+(function|const|default)/.test(content);
     log(codexOk ? '✅' : '⚠️', `Codex 产出${codexOk ? `${C.green}验证通过${C.reset}` : `${C.yellow}格式异常${C.reset}`}：${C.gray}包含 generateId 导出${C.reset}`);
   } else {
     log('❌', `${C.red}Codex 未产出文件${C.reset}`);
