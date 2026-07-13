@@ -40,7 +40,7 @@
 
 **验证任务**：第一轮让 agent 读代码并分析问题，第二轮让它修复并发安全 bug，第三轮让它写新测试验证修复。
 
-**可运行 demo**：`npm run demo:2` - 终端展示 MOSS 与 Claude Code 之间的实时多轮对话流，可见每轮工具调用、可中断。
+**可运行 demo**：`npm run demo:2` - MOSS 通过 stream-json 与 Claude Code 在单个 session 内进行三轮渐进式编码对话（分析 -> 修改 -> 测试），终端实时展示 thinking / text / tool_use 消息流。
 
 ### Level 3 - MCP 互操作
 
@@ -90,15 +90,19 @@ coder-bridge/
 ├── .gitignore
 ├── src/
 │   ├── index.js              # 入口 + demo
-│   ├── rateLimiter.js        # Token Bucket 限流器
+│   ├── rateLimiter.js        # Token Bucket 限流器（Level 2 后已添加 burst 支持）
 │   ├── taskQueue.js          # 异步任务队列
 │   ├── scheduler.js          # 限流调度器
-│   └── demo-level1.js        # Level 1 live dispatch demo
+│   ├── demo-level1.js        # Level 1 live dispatch demo
+│   └── demo-level2.js        # Level 2 streaming multi-turn demo
 ├── scratch/                  # demo:1 运行时产出（自动清理）
 │   ├── claude-output.js      # Claude Code 产出
 │   └── codex-output.js       # Codex 产出
+├── specs/
+│   └── level2-demo-spec.md   # Level 2 demo 设计规格
 ├── tests/
-│   └── unit.test.js          # 单元测试（含一个故意失败的测试）
+│   ├── unit.test.js          # 单元测试（含一个故意失败的测试）
+│   └── ratelimiter-burst.test.js  # Level 2 Round 3 产出的 burst 测试
 └── integration/
     ├── level1-oneshot.sh
     ├── level2-stream.sh
@@ -114,6 +118,7 @@ cd /Volumes/T7/coder-bridge
 npm test            # 跑单元测试
 npm run demo        # 跑基础 demo
 npm run demo:1      # 跑 Level 1 live dispatch 验证 demo
+npm run demo:2      # 跑 Level 2 streaming multi-turn 验证 demo
 ```
 
 ## 环境
@@ -128,7 +133,7 @@ npm run demo:1      # 跑 Level 1 live dispatch 验证 demo
 | 层级 | 状态 | 日期 | Demo |
 |------|------|------|------|
 | Level 1 - 一次性执行 | ✅ 已验证 | 2026-07-11 | `npm run demo:1` |
-| Level 2 - 流式多轮 | 待验证 | - | `npm run demo:2` |
+| Level 2 - 流式多轮 | ✅ 已验证 | 2026-07-13 | `npm run demo:2` |
 | Level 3 - MCP 互操作 | 待验证 | - | `npm run demo:3` |
 | Level 4 - 后台持久化 | 待验证 | - | `npm run demo:4` |
 | Level 5 - Hook + Agent | 待验证 | - | `npm run demo:5` |
@@ -148,3 +153,35 @@ npm run demo:1      # 跑 Level 1 live dispatch 验证 demo
 - 结果：35 秒完成，产出了正确的 generateId 函数（8 位随机字母数字 ID）
 
 **验证结论**：MOSS 通过 `exec_command` 调用 CLI，Claude Code 和 Codex 各自独立完成了一次性编码任务，产出了真实可读的代码文件。Level 1 one-shot dispatch 调度链路验证通过。
+
+## Level 2 验证详情
+
+**执行时间**：2026-07-13
+
+**验证方式**：Streaming Multi-turn - MOSS 通过 stream-json 协议在单个 session 内与 Claude Code 进行三轮渐进式编码对话。
+
+**通信协议**：
+- 输入：stdin 喂 NDJSON，每行 `{"type":"user","message":{"role":"user","content":"..."}}`
+- 输出：stdout 流式返回 `system/init`、`assistant`（含 thinking/text/tool_use）、`result`（标记一轮结束）
+- 多轮机制：收到 `result` 后继续喂下一条 user message，同一 session 上下文保持
+
+**Round 1 - 分析代码**：
+- 任务：读取 `src/rateLimiter.js`，分析设计缺陷
+- 结果：duration=161s, cost=$0.17, 6 turns
+- Claude Code 识别出 5 个维度的问题：无 burst 控制、并发安全、超时处理、API 设计、测试覆盖
+
+**Round 2 - 修复 bug**：
+- 任务：为 rateLimiter.js 添加 burst token 池支持
+- 结果：duration=202s, cost=$0.47, 9 turns
+- 4 处 Edit：构造函数、`_refill`、`tryConsume`、`waitForTokens`
+- 全部 13 个现有测试通过
+
+**Round 3 - 写测试**：
+- 任务：为 burst 控制写单元测试
+- 结果：duration=132s, cost=$0.68, 6 turns
+- 创建 `tests/ratelimiter-burst.test.js`，16 个测试用例
+- 覆盖：向后兼容、burst 借用、burst 恢复、参数校验、并发安全
+
+**合计**：duration=496s (~8.3 min), cost=$1.33, 3/3 rounds, 29 tests pass (13 原有 + 16 新增)
+
+**验证结论**：MOSS 在单个 stream-json session 内与 Claude Code 进行了三轮渐进式编码对话（分析 -> 修改 -> 测试），全程可见 thinking / text / tool_use 消息流。这证明 Level 2 流式多轮通信链路是通的，MOSS 能在同一个 session 内持续下发指令并观察 agent 的执行过程。

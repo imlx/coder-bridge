@@ -1,9 +1,8 @@
 /**
  * TokenBucket Rate Limiter
  *
- * 工作件代码 - 故意保留改进空间：
+ * 工作件代码 - 保留改进空间：
  * - 无持久化（重启后 token 清零）
- * - 无 burst 控制
  * - 无多桶支持
  * - refill 精度依赖 Date.now()，高频场景可能漂移
  */
@@ -15,13 +14,22 @@ export class TimeoutError extends Error {
 }
 
 export class RateLimiter {
-  constructor({ capacity = 10, refillRate = 1 } = {}) {
+  constructor({ capacity = 10, refillRate = 1, burstCapacity = 0, burstRefillRate } = {}) {
     if (capacity <= 0) throw new Error('capacity must be positive');
     if (refillRate <= 0) throw new Error('refillRate must be positive');
+    if (burstCapacity < 0) throw new Error('burstCapacity must be non-negative');
 
     this.capacity = capacity;
     this.refillRate = refillRate; // tokens per second
     this.tokens = capacity;
+    this.burstCapacity = burstCapacity;
+    this.burstTokens = burstCapacity;
+    if (burstCapacity > 0) {
+      this.burstRefillRate = burstRefillRate ?? refillRate;
+      if (this.burstRefillRate <= 0) throw new Error('burstRefillRate must be positive');
+    } else {
+      this.burstRefillRate = 0;
+    }
     this.lastRefill = Date.now();
   }
 
@@ -29,13 +37,20 @@ export class RateLimiter {
     const now = Date.now();
     const elapsed = (now - this.lastRefill) / 1000;
     this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.refillRate);
+    this.burstTokens = Math.min(this.burstCapacity, this.burstTokens + elapsed * this.burstRefillRate);
     this.lastRefill = now;
+  }
+
+  _deduct(count) {
+    const fromMain = Math.min(this.tokens, count);
+    this.tokens -= fromMain;
+    this.burstTokens -= count - fromMain;
   }
 
   tryConsume(count = 1) {
     this._refill();
-    if (this.tokens >= count) {
-      this.tokens -= count;
+    if (this.tokens + this.burstTokens >= count) {
+      this._deduct(count);
       return true;
     }
     return false;
@@ -46,9 +61,15 @@ export class RateLimiter {
     return Math.floor(this.tokens);
   }
 
+  getAvailableBurst() {
+    this._refill();
+    return Math.floor(this.burstTokens);
+  }
+
   async waitForTokens(count = 1, timeout = 30000) {
-    if (count > this.capacity) {
-      throw new Error(`count (${count}) exceeds capacity (${this.capacity})`);
+    const maxCapacity = this.capacity + this.burstCapacity;
+    if (count > maxCapacity) {
+      throw new Error(`count (${count}) exceeds capacity (${maxCapacity})`);
     }
     if (count <= 0) {
       throw new Error('count must be positive');
@@ -61,8 +82,8 @@ export class RateLimiter {
 
     // 快速路径：已有足够 token
     this._refill();
-    if (this.tokens >= count) {
-      this.tokens -= count;
+    if (this.tokens + this.burstTokens >= count) {
+      this._deduct(count);
       return;
     }
 
@@ -89,16 +110,17 @@ export class RateLimiter {
         }
 
         this._refill();
-        if (this.tokens >= count) {
-          this.tokens -= count;
+        if (this.tokens + this.burstTokens >= count) {
+          this._deduct(count);
           cleanup();
           resolve();
         }
       };
 
       // 计算需要等待的时间，使用更精确的检查间隔
-      const needed = count - this.tokens;
-      const waitMs = Math.max(10, Math.ceil((needed / this.refillRate) * 1000));
+      const needed = count - (this.tokens + this.burstTokens);
+      const totalRate = this.refillRate + this.burstRefillRate;
+      const waitMs = Math.max(10, Math.ceil((needed / totalRate) * 1000));
       checkIntervalId = setInterval(check, Math.min(waitMs / 2, 50));
 
       // 立即检查一次
