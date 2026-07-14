@@ -1,3 +1,5 @@
+import { EventEmitter } from 'events';
+
 /**
  * TokenBucket Rate Limiter
  *
@@ -13,8 +15,9 @@ export class TimeoutError extends Error {
   }
 }
 
-export class RateLimiter {
+export class RateLimiter extends EventEmitter {
   constructor({ capacity = 10, refillRate = 1, burstCapacity = 0, burstRefillRate } = {}) {
+    super();
     if (capacity <= 0) throw new Error('capacity must be positive');
     if (refillRate <= 0) throw new Error('refillRate must be positive');
     if (burstCapacity < 0) throw new Error('burstCapacity must be non-negative');
@@ -31,6 +34,7 @@ export class RateLimiter {
       this.burstRefillRate = 0;
     }
     this.lastRefill = Date.now();
+    this._notifyTimer = null;
   }
 
   _refill() {
@@ -53,7 +57,28 @@ export class RateLimiter {
       this._deduct(count);
       return true;
     }
+    this._scheduleNotify(count);
     return false;
+  }
+
+  // 精确计算 token 恢复时刻并一次性唤醒，取代上层固定间隔轮询
+  _scheduleNotify(count) {
+    if (this._notifyTimer) return;
+    const needed = count - (this.tokens + this.burstTokens);
+    const totalRate = this.refillRate + this.burstRefillRate;
+    const waitMs = Math.max(1, Math.ceil((needed / totalRate) * 1000));
+    this._notifyTimer = setTimeout(() => {
+      this._notifyTimer = null;
+      this._refill();
+      this.emit('available', this.tokens + this.burstTokens);
+    }, waitMs);
+  }
+
+  cancelNotify() {
+    if (this._notifyTimer) {
+      clearTimeout(this._notifyTimer);
+      this._notifyTimer = null;
+    }
   }
 
   getAvailable() {

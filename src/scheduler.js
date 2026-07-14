@@ -1,19 +1,16 @@
+import { EventEmitter } from 'events';
 import { RateLimiter } from './rateLimiter.js';
 import { TaskQueue } from './taskQueue.js';
 
 /**
  * Scheduler - 结合 RateLimiter 和 TaskQueue
- * 
+ *
  * 在速率限制下处理任务队列：每次处理前先消耗 token，
- * token 不足时等待下一个 refill 周期。
- * 
- * 改进空间：
- * - 无退避策略（token 不足时 busy-wait）
- * - 无优雅关闭
- * - 无 metrics 上报
+ * token 不足时等待 RateLimiter 的 'available' 事件唤醒（非轮询）。
  */
-export class Scheduler {
+export class Scheduler extends EventEmitter {
   constructor({ capacity = 5, refillRate = 2 } = {}) {
+    super();
     this.limiter = new RateLimiter({ capacity, refillRate });
     this.queue = new TaskQueue();
     this.running = false;
@@ -27,22 +24,39 @@ export class Scheduler {
     this.running = true;
     const results = [];
 
-    while (this.running && this.queue.size() > 0) {
-      if (this.limiter.tryConsume(1)) {
-        const result = await this.queue.processOne();
-        results.push(result);
-      } else {
-        // 等待 token 恢复 - 当前是 busy-wait，应该改成 event-driven
-        await new Promise((r) => setTimeout(r, 100));
+    try {
+      while (this.running && this.queue.size() > 0) {
+        if (this.limiter.tryConsume(1)) {
+          const result = await this.queue.processOne();
+          results.push(result);
+        } else {
+          await this._waitForToken();
+        }
       }
+    } finally {
+      this.running = false;
+      this.limiter.cancelNotify();
     }
-
-    this.running = false;
     return results;
+  }
+
+  // 等待 limiter 的 'available' 事件；stop() 触发 'stop' 时立即解除等待
+  _waitForToken() {
+    return new Promise((resolve) => {
+      if (!this.running) return resolve();
+      const done = () => {
+        this.limiter.removeListener('available', done);
+        this.removeListener('stop', done);
+        resolve();
+      };
+      this.limiter.once('available', done);
+      this.once('stop', done);
+    });
   }
 
   stop() {
     this.running = false;
+    this.emit('stop');
   }
 
   getStats() {
