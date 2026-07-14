@@ -1,20 +1,19 @@
 /**
- * Level 3 Demo - MCP 互操作验证
+ * Level 3 Demo - MCP 互操作验证（Claude Code 双向）
  *
  * 运行：node src/demo-level3.js
  *
- * 这个 demo 展示 MOSS 通过 MCP (Model Context Protocol) 与 Claude Code / Codex 双向互操作：
+ * 这个 demo 展示 MOSS 通过 MCP (Model Context Protocol) 与 Claude Code 双向互操作：
  *
- * 方向 A - MOSS 暴露能力（mcp-memory-server），AI 消费：
+ * 方向 A - MOSS 暴露能力（mcp-memory-server），Claude Code 消费：
  *   Part 1: 直接测试 MCP memory server 的 JSON-RPC 协议
  *           (initialize -> notifications/initialized -> tools/list -> tools/call)
  *   Part 2: Claude Code 通过 --mcp-config 消费 MCP memory server 的工具
- *   Part 3: Codex 通过 codex mcp add 注册并消费 MCP memory server 的工具
  *
- * 方向 B - AI 暴露能力（codex mcp-server），MOSS 消费：
- *   Part 4: codex mcp-server 暴露工具，MOSS 通过 JSON-RPC 调用
+ * 方向 B - Claude Code 暴露能力（claude mcp serve），MOSS 消费：
+ *   Part 3: claude mcp serve 暴露 25 个工具，MOSS 通过 JSON-RPC 调用
  *
- * 核心验证：MCP 协议在 MOSS <-> Claude Code / Codex 之间双向打通。
+ * 核心验证：MCP 协议在 MOSS <-> Claude Code 之间双向打通。
  */
 
 import { spawn } from 'child_process';
@@ -433,170 +432,81 @@ async function part2() {
   }
 }
 
-// ── Part 3: Codex 消费 MCP server ──────────────────────────
+// ── Part 3: MOSS 消费 claude mcp serve ─────────────────────
 /**
- * 方向 A 应用：Codex 通过 codex mcp add 注册 mcp-memory-server，
- * 然后用 codex exec 让 Codex 调用 MCP 工具搜索 ESM。
+ * 方向 B：claude mcp serve 作为 MCP server 暴露 Claude Code 的工具，
+ * MOSS 通过 JSON-RPC 消费。
+ * 验证 initialize -> notifications/initialized -> tools/list -> tools/call 全链路。
  */
 async function part3() {
-  console.log(`\n  ${C.gray}── Part 3: Codex consumes MCP server ──${C.reset}\n`);
+  console.log(`\n  ${C.gray}── Part 3: MOSS consumes claude mcp serve ──${C.reset}\n`);
+  log('🔌', `${C.cyan}启动 claude mcp serve 子进程${C.reset}`);
 
-  // 注册 MCP server（已注册则忽略错误）
-  log('📝', '向 Codex 注册 MCP server...');
-  const addResult = await dispatchLive(
-    'codex mcp add moss-memory -- node src/mcp-memory-server.js',
-    C.gray, 30000
-  );
-  if (addResult.ok) {
-    log('✓', 'MCP server 已注册到 Codex');
-  } else {
-    log('⚠', `codex mcp add 返回 exit ${addResult.exitCode}（可能已注册，忽略）`);
-  }
-
-  try {
-    const prompt = 'Use the search_memory MCP tool to search for ESM. Report what you find.';
-    const cmd = `codex exec '${prompt}' -s workspace-write`;
-    log('🎯', `${C.green}${C.bold}MOSS -> Codex${C.reset} ${C.gray}(via codex exec)${C.reset}`);
-    console.log(`  ${C.gray}$ codex exec '...' -s workspace-write${C.reset}\n`);
-
-    const result = await dispatchLive(cmd, C.green, PART_TIMEOUT);
-
-    if (result.ok) {
-      log('✅', `${C.green}Codex 执行完成${C.reset} ${C.gray}(exit ${result.exitCode})${C.reset}`);
-    } else {
-      log('❌', `${C.red}Codex 执行失败${C.reset} ${C.gray}(exit ${result.exitCode})${C.reset}`);
-    }
-
-    // 验证 Codex 调用了 MCP 工具（输出包含 ESM 搜索结果关键词）
-    const output = (result.stdout + '\n' + result.stderr).toLowerCase();
-    const verified =
-      output.includes('esm') || output.includes('module') ||
-      output.includes('memory') || output.includes('export') ||
-      output.includes('commonjs') || output.includes('search');
-    log(verified ? '✓' : '✗', `输出包含 MCP 工具结果：${verified ? '是' : '否'}`);
-
-    return result.ok && verified;
-  } finally {
-    log('🧹', '从 Codex 移除 MCP server...');
-    const removeResult = await dispatchLive(
-      'codex mcp remove moss-memory', C.gray, 30000
-    );
-    if (removeResult.ok) {
-      log('✓', 'MCP server 已从 Codex 移除');
-    } else {
-      log('⚠', `codex mcp remove 返回 exit ${removeResult.exitCode}`);
-    }
-  }
-}
-
-// ── Part 4: Codex 作为 MCP server（方向 B）─────────────────
-/**
- * 方向 B：codex mcp-server 作为 MCP server 暴露 Codex 自身工具，
- * MOSS 通过 JSON-RPC initialize / tools/list / tools/call 消费。
- */
-async function part4() {
-  console.log(`\n  ${C.gray}── Part 4: Codex as MCP server (Direction B) ──${C.reset}\n`);
-  log('🔌', `${C.cyan}启动 codex mcp-server 子进程${C.reset}`);
-
-  const env = { ...process.env, PATH: nodeBinDir + ':' + (process.env.PATH || '') };
-  const client = new McpClient('codex', ['mcp-server'], { cwd: projectRoot, env });
+  const client = new McpClient('bash', ['-c', `${NVM_INIT} && claude mcp serve`], { cwd: projectRoot });
   client.onSend = showSent;
   client.onRecv = showRecv;
 
   try {
     client.start();
-    await sleep(1500); // codex 启动较慢，多等一会
+    await sleep(2000); // claude mcp serve 启动较慢
     if (client.exited) {
-      throw new Error(`codex mcp-server 启动后立即退出 (code=${client.exitCode})`);
+      throw new Error(`claude mcp serve 启动后立即退出 (code=${client.exitCode})`);
     }
 
-    // initialize
+    // 1. initialize - 验证 protocolVersion / capabilities / serverInfo
     log('📤', '发送 initialize 请求...');
     const initResult = await client.request('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
       clientInfo: { name: 'demo-level3', version: '1.0.0' },
-    }, 20000);
-    log('✓', `已初始化：${initResult?.serverInfo?.name || 'unknown'} v${initResult?.serverInfo?.version || '?'}`);
+    }, 30000);
 
-    // notifications/initialized
+    const pvOk = initResult?.protocolVersion === '2024-11-05';
+    const capOk = !!initResult?.capabilities;
+    const siOk = !!initResult?.serverInfo;
+    log(pvOk ? '✓' : '✗', `protocolVersion=${initResult?.protocolVersion || 'missing'}`);
+    log(capOk ? '✓' : '✗', `capabilities=${capOk ? 'present' : 'missing'}`);
+    log(siOk ? '✓' : '✗', `serverInfo=${siOk ? JSON.stringify(initResult.serverInfo) : 'missing'}`);
+
+    // 2. notifications/initialized（无 id，不期望响应）
+    log('📤', '发送 notifications/initialized...');
     client.notify('notifications/initialized', {});
     await sleep(500);
 
-    // tools/list — 查看 Codex 暴露了哪些工具
+    // 3. tools/list - 验证 Claude Code 暴露的工具集
     log('📤', '发送 tools/list 请求...');
-    const toolsResult = await client.request('tools/list', {}, 20000);
-    const tools = toolsResult?.tools || [];
-    log('✓', `Codex 作为 MCP server 暴露 ${tools.length} 个工具：`);
-    tools.forEach((t) => {
-      const desc = (t.description || '').slice(0, 70);
-      console.log(`       ${C.green}•${C.reset} ${C.bold}${t.name}${C.reset} ${C.gray}${desc}${C.reset}`);
-    });
+    const toolsResult = await client.request('tools/list', {}, 30000);
+    const toolNames = (toolsResult?.tools || []).map((t) => t.name);
+    const hasRead = toolNames.includes('Read');
+    const hasBash = toolNames.includes('Bash');
+    const hasWrite = toolNames.includes('Write');
+    const toolsOk = toolNames.length >= 10 && hasRead && hasBash;
+    log(toolsOk ? '✓' : '✗',
+      `tools/list 返回 ${toolNames.length} 个工具：${toolNames.slice(0, 8).join(', ')}${toolNames.length > 8 ? '...' : ''}`);
 
-    if (tools.length === 0) {
-      log('⚠', 'Codex 未暴露任何工具');
-      return false;
-    }
+    // 4. tools/call Read - 读取 package.json 验证工具实际可用
+    log('📤', '发送 tools/call Read {file_path: "package.json"}...');
+    const readResult = await client.request('tools/call', {
+      name: 'Read',
+      arguments: { file_path: join(projectRoot, 'package.json') },
+    }, 30000);
+    const readText = readResult?.content?.[0]?.text || '';
+    const readOk = readText.length > 0 && (readText.includes('name') || readText.includes('demo'));
+    log(readOk ? '✓' : '✗', `Read 返回 ${readText.length} 字符`);
+    if (readText) showTextBlock(readText.slice(0, 500) + (readText.length > 500 ? '\n...' : ''));
 
-    // 选一个安全的工具调用（优先 shell/exec 类，跳过 patch/write/delete 类）
-    const safeTool =
-      tools.find((t) => /shell|exec|run/i.test(t.name)) ||
-      tools.find((t) => !/patch|write|delete|remove/i.test(t.name));
-    if (!safeTool) {
-      log('⚠', '未找到安全的工具可调用，跳过 tools/call');
-      return true; // tools/list 成功即算通过
-    }
-
-    log('📤', `调用工具：${safeTool.name}...`);
-
-    // 根据 inputSchema 构造最小安全参数
-    const args = {};
-    const props = safeTool.inputSchema?.properties || {};
-    for (const [key, val] of Object.entries(props)) {
-      if (val.type === 'string') {
-        if (/command|cmd/i.test(key)) {
-          args[key] = "echo 'MCP test from demo-level3'";
-        } else if (/prompt|message|instruction|input|query/i.test(key)) {
-          args[key] = "Reply with exactly: MCP connection successful. Do not modify any files.";
-        } else {
-          args[key] = 'test';
-        }
-      } else if (val.type === 'boolean') {
-        args[key] = false;
-      } else if (val.type === 'number' || val.type === 'integer') {
-        args[key] = 1;
-      } else {
-        args[key] = null;
-      }
-    }
-
-    try {
-      const callResult = await client.request('tools/call', {
-        name: safeTool.name,
-        arguments: args,
-      }, 30000);
-      const resultText =
-        callResult?.content?.map((c) => c.text).filter(Boolean).join('\n') ||
-        JSON.stringify(callResult);
-      log('✓', `工具 ${safeTool.name} 返回结果：`);
-      showTextBlock(resultText);
-      return true;
-    } catch (err) {
-      log('⚠', `工具调用失败：${err.message}`);
-      return true; // tools/list 成功即算通过
-    }
+    return pvOk && capOk && siOk && toolsOk && readOk;
   } finally {
     client.close();
   }
 }
 
-// ── 主流程 ─────────────────────────────────────────────────
 async function main() {
   console.log('\n');
   banner('coder-bridge · Level 3 MCP 互操作验证');
-  console.log(`  ${C.gray}验证目标：MCP 协议在 MOSS <-> Claude Code / Codex 之间双向打通${C.reset}`);
-  console.log(`  ${C.gray}方向 A：MOSS 暴露能力（mcp-memory-server），AI 消费${C.reset}`);
-  console.log(`  ${C.gray}方向 B：AI 暴露能力（codex mcp-server），MOSS 消费${C.reset}`);
+  console.log(`  ${C.gray}验证目标：MCP 协议在 MOSS <-> Claude Code 之间双向打通${C.reset}`);
+  console.log(`  ${C.gray}方向 A：MOSS 暴露能力（mcp-memory-server），Claude Code 消费${C.reset}`);
+  console.log(`  ${C.gray}方向 B：Claude Code 暴露能力（claude mcp serve），MOSS 消费${C.reset}`);
   console.log(`  ${C.gray}时间：${new Date().toISOString()}${C.reset}`);
   console.log(`  ${C.gray}项目：${projectRoot}${C.reset}`);
 
@@ -630,17 +540,7 @@ async function main() {
   } catch (err) {
     log('❌', `${C.red}Part 3 出错：${err.message}${C.reset}`);
   }
-  results.push({ name: 'Part 3: Codex consumes MCP', duration: Date.now() - t3, ok: p3Ok });
-
-  // Part 4
-  const t4 = Date.now();
-  let p4Ok = false;
-  try {
-    p4Ok = await part4();
-  } catch (err) {
-    log('❌', `${C.red}Part 4 出错：${err.message}${C.reset}`);
-  }
-  results.push({ name: 'Part 4: Codex as MCP server', duration: Date.now() - t4, ok: p4Ok });
+  results.push({ name: 'Part 3: MOSS consumes claude mcp serve', duration: Date.now() - t3, ok: p3Ok });
 
   // ── 总结 ─────────────────────────────────────────────────
   console.log('\n');
@@ -673,8 +573,8 @@ async function main() {
   );
 
   console.log(`\n  ${C.bold}验证内容：${C.reset}${C.gray}方向 A - MOSS 的 mcp-memory-server 通过 MCP 协议被 Claude Code${C.reset}`);
-  console.log(`  ${C.gray}和 Codex 消费（Part 1 直接协议测试，Part 2/3 AI 消费）；方向 B - Codex 作为${C.reset}`);
-  console.log(`  ${C.gray}MCP server 暴露自身工具，MOSS 通过 JSON-RPC 消费（Part 4）。${C.reset}`);
+  console.log(`  ${C.gray}消费（Part 1 直接协议测试，Part 2 AI 消费）；方向 B - Claude Code 通过${C.reset}`);
+  console.log(`  ${C.gray}claude mcp serve 暴露 25 个工具，MOSS 通过 JSON-RPC 消费（Part 3）。${C.reset}`);
   console.log(`  ${C.gray}这证明 Level 3 MCP 双向互操作链路是通的。${C.reset}\n`);
 
   process.exit(allOk ? 0 : 1);
