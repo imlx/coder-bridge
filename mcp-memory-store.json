@@ -1,0 +1,27 @@
+[
+  {
+    "title": "五层调度验证计划",
+    "content": "coder-bridge 项目验证白龙马 Agent 对 Claude Code 和 Codex CLI 的五层调度能力。Level 1: 一次性执行(claude -p / codex exec)。Level 2: 流式多轮(stream-json / exec-server)。Level 3: MCP 互操作。Level 4: 后台持久化。Level 5: Hook + 自定义 Agent。Level 1 和 2 已验证通过。",
+    "tags": ["project", "plan", "verification"]
+  },
+  {
+    "title": "ESM 格式约束",
+    "content": "项目 package.json 设置了 type: module，所有产出代码必须使用 ES Module 语法(export function / import)，不能使用 CommonJS(module.exports / require)。Level 1 demo 曾因 AI 产出 CommonJS 导致验证失败，后在 prompt 中明确要求 ESM 解决。",
+    "tags": ["convention", "esm", "bug-fix"]
+  },
+  {
+    "title": "RateLimiter burst token 改进",
+    "content": "Level 2 验证中，Claude Code 通过 stream-json 多轮对话给 rateLimiter.js 添加了 burst token 池功能。新增 burstCapacity 和 burstRefillRate 参数，支持突发流量借用和恢复。16 个 burst 测试全部通过。",
+    "tags": ["rate-limiter", "burst", "level2"]
+  },
+  {
+    "title": "stream-json 协议格式",
+    "content": "Claude Code stream-json 模式：stdin 喂 NDJSON 每行 {type:user, message:{role:user, content:...}}，stdout 流式返回 system/init, assistant(thinking/text/tool_use), result 消息。收到 result 后可继续发下一条 user message，同一 session 上下文保持。",
+    "tags": ["claude-code", "stream-json", "protocol"]
+  },
+  {
+    "title": "项目结构",
+    "content": "src/rateLimiter.js(Token Bucket), src/taskQueue.js(异步队列), src/scheduler.js(限流+调度), src/demo-level1.js, src/demo-level2.js, src/mcp-memory-server.js。Tests: tests/unit.test.js, tests/ratelimiter-burst.test.js。使用 nvm use 22 启动，git 管理。",
+    "tags": ["project", "structure"]
+  }
+]
