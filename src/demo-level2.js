@@ -29,7 +29,7 @@ import { existsSync, readFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const ROUND_TIMEOUT = 300000; // 每轮最多 120 秒
+const ROUND_TIMEOUT = 300000; // 每轮最多 300 秒
 
 // ── ANSI 颜色 ──────────────────────────────────────────────
 const C = {
@@ -172,7 +172,7 @@ class ClaudeStreamSession {
       '--output-format', 'stream-json',
       '--verbose',
     ];
-    const CLAUDE_BIN = '/Users/lingxiao/.nvm/versions/node/v22.16.0/bin';
+    const CLAUDE_BIN = process.env.CLAUDE_BIN || '';
     this.process = spawn('claude', args, {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -337,6 +337,7 @@ const ROUNDS = [
   {
     title: 'Round 3 · 写测试',
     desc: '为 burst 控制写单元测试',
+    timeout: 600000, // 写测试任务较重，给 600s
     prompt: [
       '为修改后的 src/rateLimiter.js 写单元测试，保存到 tests/ratelimiter-burst.test.js。',
       '要求：',
@@ -399,7 +400,7 @@ export async function runDemo() {
 
       let result;
       try {
-        result = await session.sendRound(round.prompt, ROUND_TIMEOUT);
+        result = await session.sendRound(round.prompt, round.timeout || ROUND_TIMEOUT);
       } catch (err) {
         log('❌', `${C.red}${round.title} 失败：${err.message}${C.reset}`);
         roundResults.push({

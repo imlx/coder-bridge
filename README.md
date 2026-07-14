@@ -44,6 +44,8 @@
 
 **可运行 demo**：`npm run demo:2` - MOSS 通过 stream-json 与 Claude Code 在单个 session 内进行三轮渐进式编码对话（分析 -> 修改 -> 测试），终端实时展示 thinking / text / tool_use 消息流。
 
+📐 **架构文档**：[`docs/level2-architecture.md`](docs/level2-architecture.md) - 调度决策机制、服务生命周期、架构演进建议
+
 ### Level 3 - MCP 互操作
 
 **目标**：验证双向 MCP 能力互操作。
@@ -80,7 +82,8 @@ coder-bridge/
 ├── package.json
 ├── .gitignore
 ├── docs/
-│   └── level1-architecture.md   # Level 1 架构文档
+│   ├── level1-architecture.md   # Level 1 架构文档
+│   └── level2-architecture.md   # Level 2 架构文档
 ├── src/
 │   ├── index.js              # 入口 + demo
 │   ├── rateLimiter.js        # Token Bucket 限流器（Level 2 后已添加 burst 支持）
@@ -127,7 +130,7 @@ npm run demo:3      # 跑 Level 3 MCP 互操作验证 demo
 | 层级 | 状态 | 日期 | Demo |
 |------|------|------|------|
 | Level 1 - 一次性执行 | ✅ 已验证 + 架构文档 | 2026-07-11 | `npm run demo:1` |
-| Level 2 - 流式多轮 | ✅ 已验证 | 2026-07-13 | `npm run demo:2` |
+| Level 2 - 流式多轮 | ✅ 已验证 + 架构文档 | 2026-07-13 | `npm run demo:2` |
 | Level 3 - MCP 互操作 | ✅ 已验证 | 2026-07-14 | `npm run demo:3` |
 | Level 4 - 后台持久化 | 待验证 | - | `npm run demo:4` |
 | Level 5 - Hook + Agent | 待验证 | - | `npm run demo:5` |
@@ -148,7 +151,7 @@ npm run demo:3      # 跑 Level 3 MCP 互操作验证 demo
 
 **验证结论**：MOSS 通过 `exec_command` 调用 CLI，Claude Code 和 Codex 各自独立完成了一次性编码任务，产出了真实可读的代码文件。Level 1 one-shot dispatch 调度链路验证通过。
 
-**架构文档**：[`docs/level1-architecture.md`](docs/level1-architecture.md) - 包含调度决策机制（MOSS 能力注册表概念、何时选择 one-shot）、服务生命周期（CLI 安装、进程管理、scratch 清理）、架构演进建议（并行 dispatch、能力注册表实例化、Agent 池管理）。
+**架构文档**：[`docs/level1-architecture.md`](docs/level1-architecture.md) - 包含调度决策机制（MOSS 现有 Agent 能力在 one-shot 中的应用、何时选择 one-shot）、服务生命周期（CLI 安装、进程管理、scratch 清理）、架构演进建议（并行 dispatch、调度经验记忆化、Agent 池管理）。
 
 ## Level 2 验证详情
 
