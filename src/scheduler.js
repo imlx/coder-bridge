@@ -51,4 +51,13 @@ export class Scheduler {
       availableTokens: this.limiter.getAvailable(),
     };
   }
+
+  getMetrics() {
+    return {
+      running: this.running,
+      queueSize: this.queue.size(),
+      availableTokens: this.limiter.getAvailable(),
+      capacity: this.limiter.capacity,
+    };
+  }
 }
